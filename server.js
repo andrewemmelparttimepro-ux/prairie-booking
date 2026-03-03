@@ -1,17 +1,32 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
-const Database = require('better-sqlite3');
+const sqlite3 = require('sqlite3').verbose();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
 // ─── DATABASE ────────────────────────────────────────────────────────────────
-const db = new Database(path.join(__dirname, 'bookings.db'));
-db.pragma('journal_mode = WAL');
+const db = new sqlite3.Database(path.join(__dirname, 'bookings.db'), (err) => {
+  if (err) { console.error('DB open error:', err); process.exit(1); }
+  console.log('📦 Database opened');
+});
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS bookings (
+// Promisify helpers
+const dbRun = (sql, params = []) => new Promise((res, rej) =>
+  db.run(sql, params, function(err) { err ? rej(err) : res(this); })
+);
+const dbGet = (sql, params = []) => new Promise((res, rej) =>
+  db.get(sql, params, (err, row) => err ? rej(err) : res(row))
+);
+const dbAll = (sql, params = []) => new Promise((res, rej) =>
+  db.all(sql, params, (err, rows) => err ? rej(err) : res(rows))
+);
+
+// Serialize init to ensure WAL + schema before serving requests
+db.serialize(() => {
+  db.run('PRAGMA journal_mode = WAL');
+  db.run(`CREATE TABLE IF NOT EXISTS bookings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     phone TEXT NOT NULL,
@@ -23,40 +38,31 @@ db.exec(`
     notes TEXT,
     status TEXT DEFAULT 'pending',
     created_at TEXT DEFAULT (datetime('now'))
-  );
-
-  CREATE TABLE IF NOT EXISTS blocked_slots (
+  )`);
+  db.run(`CREATE TABLE IF NOT EXISTS blocked_slots (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     block_date TEXT NOT NULL,
     start_time TEXT NOT NULL,
     end_time TEXT NOT NULL,
     reason TEXT,
     created_at TEXT DEFAULT (datetime('now'))
-  );
-`);
+  )`);
+});
 
 // ─── MIDDLEWARE ───────────────────────────────────────────────────────────────
 app.use(cors({
-  origin: [
-    'https://prairie-pumping-lightship.netlify.app',
-    'http://localhost:3000',
-    'http://localhost:8080',
-    'http://127.0.0.1:5500',
-    // allow all during development
-    /\.netlify\.app$/
-  ],
+  origin: (origin, cb) => cb(null, true), // allow all origins
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'X-Admin-Password']
 }));
 app.use(express.json());
-app.use(express.static(__dirname));
+
+// Serve admin.html
+app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'admin.html')));
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 const ADMIN_PASSWORD = 'BoredRoom2025!';
 
-/**
- * Returns estimated hours given yard count.
- */
 function yardsToHours(yards) {
   if (yards <= 30) return 2;
   if (yards <= 60) return 3;
@@ -66,9 +72,6 @@ function yardsToHours(yards) {
   return 8;
 }
 
-/**
- * Adds hours to HH:MM string, returns HH:MM (capped at 17:00).
- */
 function addHours(timeStr, hours) {
   const [h, m] = timeStr.split(':').map(Number);
   const totalMins = h * 60 + m + hours * 60;
@@ -77,36 +80,22 @@ function addHours(timeStr, hours) {
   return `${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}`;
 }
 
-/**
- * Converts HH:MM to minutes since midnight.
- */
 function toMins(timeStr) {
   const [h, m] = timeStr.split(':').map(Number);
   return h * 60 + m;
 }
 
-/**
- * Checks if two time ranges overlap.
- */
-function overlaps(start1, end1, start2, end2) {
-  return toMins(start1) < toMins(end2) && toMins(end1) > toMins(start2);
+function overlaps(s1, e1, s2, e2) {
+  return toMins(s1) < toMins(e2) && toMins(e1) > toMins(s2);
 }
 
-/**
- * Returns the day-of-week for a YYYY-MM-DD string (0=Sun, 6=Sat).
- */
 function getDayOfWeek(dateStr) {
-  // Parse in local time to avoid UTC offset issues
   const [y, m, d] = dateStr.split('-').map(Number);
   return new Date(y, m - 1, d).getDay();
 }
 
-/**
- * Middleware: verify admin password header.
- */
 function requireAdmin(req, res, next) {
-  const pw = req.headers['x-admin-password'];
-  if (pw !== ADMIN_PASSWORD) {
+  if (req.headers['x-admin-password'] !== ADMIN_PASSWORD) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   next();
@@ -114,252 +103,184 @@ function requireAdmin(req, res, next) {
 
 // ─── ROUTES ───────────────────────────────────────────────────────────────────
 
-// Health check
-app.get('/health', (req, res) => res.json({ status: 'ok' }));
-
-// Admin panel HTML
-app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'admin.html')));
+app.get('/health', (req, res) => res.json({ status: 'ok', ts: new Date().toISOString() }));
 
 /**
  * GET /api/availability?date=YYYY-MM-DD
- * Returns 11 one-hour slots (6:00–16:00) with status.
  */
-app.get('/api/availability', (req, res) => {
-  const { date } = req.query;
-  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    return res.status(400).json({ error: 'Invalid date format. Use YYYY-MM-DD.' });
-  }
-
-  // Sunday = 0, closed
-  const dow = getDayOfWeek(date);
-  if (dow === 0) {
-    // Return all slots as unavailable
-    const slots = [];
-    for (let h = 6; h < 17; h++) {
-      slots.push({
-        time: `${String(h).padStart(2, '0')}:00`,
-        status: 'unavailable',
-        reason: 'Closed on Sundays'
-      });
+app.get('/api/availability', async (req, res) => {
+  try {
+    const { date } = req.query;
+    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ error: 'Invalid date. Use YYYY-MM-DD.' });
     }
-    return res.json({ date, slots });
-  }
 
-  // Get approved bookings for this date
-  const approvedBookings = db.prepare(
-    `SELECT requested_start, requested_end FROM bookings WHERE requested_date = ? AND status = 'approved'`
-  ).all(date);
+    const dow = getDayOfWeek(date);
+    const TIMES = ['06:00','07:00','08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00'];
 
-  // Get pending bookings for this date
-  const pendingBookings = db.prepare(
-    `SELECT requested_start, requested_end FROM bookings WHERE requested_date = ? AND status = 'pending'`
-  ).all(date);
+    if (dow === 0) {
+      return res.json({ date, slots: TIMES.map(t => ({ time: t, status: 'unavailable', reason: 'Closed Sundays' })) });
+    }
 
-  // Get blocked slots for this date
-  const blockedSlots = db.prepare(
-    `SELECT start_time, end_time FROM blocked_slots WHERE block_date = ?`
-  ).all(date);
+    const approved = await dbAll(
+      `SELECT requested_start, requested_end FROM bookings WHERE requested_date = ? AND status = 'approved'`, [date]
+    );
+    const pending = await dbAll(
+      `SELECT requested_start, requested_end FROM bookings WHERE requested_date = ? AND status = 'pending'`, [date]
+    );
+    const blocked = await dbAll(
+      `SELECT start_time, end_time FROM blocked_slots WHERE block_date = ?`, [date]
+    );
 
-  const slots = [];
-  for (let h = 6; h < 17; h++) {
-    const slotStart = `${String(h).padStart(2, '0')}:00`;
-    const slotEnd = `${String(h + 1).padStart(2, '0')}:00`;
+    const slots = TIMES.map(time => {
+      const slotEnd = `${String(parseInt(time) + 1).padStart(2, '0')}:00`;
+      let status = 'available';
 
-    let status = 'available';
-
-    // Check approved bookings and blocked slots → "booked"
-    for (const b of approvedBookings) {
-      if (overlaps(slotStart, slotEnd, b.requested_start, b.requested_end)) {
-        status = 'booked';
-        break;
+      for (const b of [...approved, ...blocked.map(b => ({ requested_start: b.start_time, requested_end: b.end_time }))]) {
+        const s = b.requested_start || b.start_time;
+        const e = b.requested_end || b.end_time;
+        if (overlaps(time, slotEnd, s, e)) { status = 'booked'; break; }
       }
-    }
 
-    if (status === 'available') {
-      for (const b of blockedSlots) {
-        if (overlaps(slotStart, slotEnd, b.start_time, b.end_time)) {
-          status = 'booked';
-          break;
+      if (status === 'available') {
+        for (const b of pending) {
+          if (overlaps(time, slotEnd, b.requested_start, b.requested_end)) { status = 'pending'; break; }
         }
       }
-    }
 
-    // Check pending bookings → "pending" (only if not already booked)
-    if (status === 'available') {
-      for (const b of pendingBookings) {
-        if (overlaps(slotStart, slotEnd, b.requested_start, b.requested_end)) {
-          status = 'pending';
-          break;
-        }
-      }
-    }
+      return { time, status };
+    });
 
-    slots.push({ time: slotStart, status });
+    res.json({ date, slots });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
   }
-
-  res.json({ date, slots });
 });
 
 /**
  * POST /api/request
- * Body: { name, phone, date, startTime, yards, notes }
  */
-app.post('/api/request', (req, res) => {
-  const { name, phone, date, startTime, yards, notes } = req.body;
+app.post('/api/request', async (req, res) => {
+  try {
+    const { name, phone, date, startTime, yards, notes } = req.body;
 
-  // Validation
-  if (!name || !phone || !date || !startTime || !yards) {
-    return res.status(400).json({ error: 'Missing required fields: name, phone, date, startTime, yards' });
-  }
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    return res.status(400).json({ error: 'Invalid date format. Use YYYY-MM-DD.' });
-  }
-  if (!/^\d{2}:\d{2}$/.test(startTime)) {
-    return res.status(400).json({ error: 'Invalid startTime format. Use HH:MM.' });
-  }
-
-  const yardsNum = parseInt(yards);
-  if (isNaN(yardsNum) || yardsNum < 1 || yardsNum > 9999) {
-    return res.status(400).json({ error: 'Invalid yards value.' });
-  }
-
-  // Sunday check
-  const dow = getDayOfWeek(date);
-  if (dow === 0) {
-    return res.status(400).json({ error: 'We are closed on Sundays.' });
-  }
-
-  // Business hours check
-  const startMins = toMins(startTime);
-  if (startMins < toMins('06:00') || startMins >= toMins('17:00')) {
-    return res.status(400).json({ error: 'Start time must be between 6:00 AM and 5:00 PM.' });
-  }
-
-  const estimatedHours = yardsToHours(yardsNum);
-  const endTime = addHours(startTime, estimatedHours);
-
-  // Check availability: no overlap with approved bookings or blocked slots
-  const approvedBookings = db.prepare(
-    `SELECT requested_start, requested_end FROM bookings WHERE requested_date = ? AND status = 'approved'`
-  ).all(date);
-
-  const blockedSlots = db.prepare(
-    `SELECT start_time, end_time FROM blocked_slots WHERE block_date = ?`
-  ).all(date);
-
-  for (const b of approvedBookings) {
-    if (overlaps(startTime, endTime, b.requested_start, b.requested_end)) {
-      return res.status(409).json({ error: 'That time slot conflicts with an existing booking. Please choose another time.' });
+    if (!name || !phone || !date || !startTime || !yards) {
+      return res.status(400).json({ error: 'Missing required fields.' });
     }
-  }
-
-  for (const b of blockedSlots) {
-    if (overlaps(startTime, endTime, b.start_time, b.end_time)) {
-      return res.status(409).json({ error: 'That time slot is unavailable. Please choose another time.' });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ error: 'Invalid date format.' });
     }
+
+    const yardsNum = parseInt(yards);
+    if (isNaN(yardsNum) || yardsNum < 1) {
+      return res.status(400).json({ error: 'Invalid yards.' });
+    }
+
+    const dow = getDayOfWeek(date);
+    if (dow === 0) return res.status(400).json({ error: 'Closed on Sundays.' });
+
+    const startMins = toMins(startTime);
+    if (startMins < toMins('06:00') || startMins >= toMins('17:00')) {
+      return res.status(400).json({ error: 'Start time must be 6:00 AM – 5:00 PM.' });
+    }
+
+    const estimatedHours = yardsToHours(yardsNum);
+    const endTime = addHours(startTime, estimatedHours);
+
+    // Check for conflicts
+    const approved = await dbAll(
+      `SELECT requested_start, requested_end FROM bookings WHERE requested_date = ? AND status = 'approved'`, [date]
+    );
+    const blocked = await dbAll(
+      `SELECT start_time as requested_start, end_time as requested_end FROM blocked_slots WHERE block_date = ?`, [date]
+    );
+
+    for (const b of [...approved, ...blocked]) {
+      if (overlaps(startTime, endTime, b.requested_start, b.requested_end)) {
+        return res.status(409).json({ error: 'Time slot conflicts with existing booking. Please choose another time.' });
+      }
+    }
+
+    const result = await dbRun(
+      `INSERT INTO bookings (name, phone, requested_date, requested_start, requested_end, yards, estimated_hours, notes, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+      [name, phone, date, startTime, endTime, yardsNum, estimatedHours, notes || null]
+    );
+
+    const booking = await dbGet('SELECT * FROM bookings WHERE id = ?', [result.lastID]);
+    console.log('📋 NEW BOOKING:', JSON.stringify(booking));
+
+    res.json({ success: true, booking });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
   }
-
-  // Insert booking
-  const stmt = db.prepare(`
-    INSERT INTO bookings (name, phone, requested_date, requested_start, requested_end, yards, estimated_hours, notes, status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')
-  `);
-  const result = stmt.run(name, phone, date, startTime, endTime, yardsNum, estimatedHours, notes || null);
-
-  const booking = db.prepare('SELECT * FROM bookings WHERE id = ?').get(result.lastInsertRowid);
-
-  // Log the new booking (Slack notification handled separately)
-  console.log('📋 NEW BOOKING REQUEST:', JSON.stringify(booking, null, 2));
-
-  res.json({ success: true, booking });
 });
 
-// ─── ADMIN ROUTES ─────────────────────────────────────────────────────────────
+// ─── ADMIN ────────────────────────────────────────────────────────────────────
 
-/**
- * GET /api/admin/requests?status=pending|approved|denied
- */
-app.get('/api/admin/requests', requireAdmin, (req, res) => {
-  const { status } = req.query;
-  let bookings;
-  if (status) {
-    bookings = db.prepare('SELECT * FROM bookings WHERE status = ? ORDER BY requested_date, requested_start').all(status);
-  } else {
-    bookings = db.prepare('SELECT * FROM bookings ORDER BY requested_date, requested_start').all();
-  }
-  res.json(bookings);
+app.get('/api/admin/requests', requireAdmin, async (req, res) => {
+  try {
+    const { status } = req.query;
+    const rows = status
+      ? await dbAll('SELECT * FROM bookings WHERE status = ? ORDER BY requested_date, requested_start', [status])
+      : await dbAll('SELECT * FROM bookings ORDER BY requested_date, requested_start');
+    res.json(rows);
+  } catch (err) { res.status(500).json({ error: 'Server error' }); }
 });
 
-/**
- * PUT /api/admin/requests/:id/approve
- */
-app.put('/api/admin/requests/:id/approve', requireAdmin, (req, res) => {
-  const { id } = req.params;
-  const booking = db.prepare('SELECT * FROM bookings WHERE id = ?').get(id);
-  if (!booking) return res.status(404).json({ error: 'Booking not found' });
-
-  db.prepare("UPDATE bookings SET status = 'approved' WHERE id = ?").run(id);
-  const updated = db.prepare('SELECT * FROM bookings WHERE id = ?').get(id);
-  console.log('✅ BOOKING APPROVED:', id, updated.name, updated.requested_date, updated.requested_start);
-  res.json(updated);
+app.put('/api/admin/requests/:id/approve', requireAdmin, async (req, res) => {
+  try {
+    await dbRun("UPDATE bookings SET status = 'approved' WHERE id = ?", [req.params.id]);
+    const b = await dbGet('SELECT * FROM bookings WHERE id = ?', [req.params.id]);
+    if (!b) return res.status(404).json({ error: 'Not found' });
+    console.log('✅ APPROVED:', b.id, b.name, b.requested_date);
+    res.json(b);
+  } catch (err) { res.status(500).json({ error: 'Server error' }); }
 });
 
-/**
- * PUT /api/admin/requests/:id/deny
- */
-app.put('/api/admin/requests/:id/deny', requireAdmin, (req, res) => {
-  const { id } = req.params;
-  const booking = db.prepare('SELECT * FROM bookings WHERE id = ?').get(id);
-  if (!booking) return res.status(404).json({ error: 'Booking not found' });
-
-  db.prepare("UPDATE bookings SET status = 'denied' WHERE id = ?").run(id);
-  const updated = db.prepare('SELECT * FROM bookings WHERE id = ?').get(id);
-  console.log('❌ BOOKING DENIED:', id, updated.name, updated.requested_date, updated.requested_start);
-  res.json(updated);
+app.put('/api/admin/requests/:id/deny', requireAdmin, async (req, res) => {
+  try {
+    await dbRun("UPDATE bookings SET status = 'denied' WHERE id = ?", [req.params.id]);
+    const b = await dbGet('SELECT * FROM bookings WHERE id = ?', [req.params.id]);
+    if (!b) return res.status(404).json({ error: 'Not found' });
+    console.log('❌ DENIED:', b.id, b.name);
+    res.json(b);
+  } catch (err) { res.status(500).json({ error: 'Server error' }); }
 });
 
-/**
- * POST /api/admin/block
- * Body: { date, startTime, endTime, reason }
- */
-app.post('/api/admin/block', requireAdmin, (req, res) => {
-  const { date, startTime, endTime, reason } = req.body;
-  if (!date || !startTime || !endTime) {
-    return res.status(400).json({ error: 'Missing required fields: date, startTime, endTime' });
-  }
-  const result = db.prepare(
-    'INSERT INTO blocked_slots (block_date, start_time, end_time, reason) VALUES (?, ?, ?, ?)'
-  ).run(date, startTime, endTime, reason || null);
-
-  const slot = db.prepare('SELECT * FROM blocked_slots WHERE id = ?').get(result.lastInsertRowid);
-  console.log('🚫 SLOT BLOCKED:', JSON.stringify(slot));
-  res.json(slot);
+app.post('/api/admin/block', requireAdmin, async (req, res) => {
+  try {
+    const { date, startTime, endTime, reason } = req.body;
+    if (!date || !startTime || !endTime) {
+      return res.status(400).json({ error: 'date, startTime, endTime required' });
+    }
+    const result = await dbRun(
+      'INSERT INTO blocked_slots (block_date, start_time, end_time, reason) VALUES (?, ?, ?, ?)',
+      [date, startTime, endTime, reason || null]
+    );
+    const slot = await dbGet('SELECT * FROM blocked_slots WHERE id = ?', [result.lastID]);
+    res.json(slot);
+  } catch (err) { res.status(500).json({ error: 'Server error' }); }
 });
 
-/**
- * DELETE /api/admin/block/:id
- */
-app.delete('/api/admin/block/:id', requireAdmin, (req, res) => {
-  const { id } = req.params;
-  const slot = db.prepare('SELECT * FROM blocked_slots WHERE id = ?').get(id);
-  if (!slot) return res.status(404).json({ error: 'Blocked slot not found' });
-
-  db.prepare('DELETE FROM blocked_slots WHERE id = ?').run(id);
-  console.log('🟢 BLOCK REMOVED:', id);
-  res.json({ success: true });
+app.delete('/api/admin/block/:id', requireAdmin, async (req, res) => {
+  try {
+    await dbRun('DELETE FROM blocked_slots WHERE id = ?', [req.params.id]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'Server error' }); }
 });
 
-/**
- * GET /api/admin/blocks - list all blocked slots
- */
-app.get('/api/admin/blocks', requireAdmin, (req, res) => {
-  const slots = db.prepare('SELECT * FROM blocked_slots ORDER BY block_date, start_time').all();
-  res.json(slots);
+app.get('/api/admin/blocks', requireAdmin, async (req, res) => {
+  try {
+    const slots = await dbAll('SELECT * FROM blocked_slots ORDER BY block_date, start_time');
+    res.json(slots);
+  } catch (err) { res.status(500).json({ error: 'Server error' }); }
 });
 
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`🚀 Prairie Booking API running on port ${PORT}`);
-  console.log(`   Admin panel: http://localhost:${PORT}/admin`);
-  console.log(`   Health: http://localhost:${PORT}/health`);
+  console.log(`🚀 Prairie Booking API on port ${PORT}`);
+  console.log(`   Admin: /admin | Health: /health`);
 });
