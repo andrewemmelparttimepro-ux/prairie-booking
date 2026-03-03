@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Prairie Pumping — Admin</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700;800&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --accent: #CCFF00;
+      --bg: #0a0a0a;
+      --surface: #141414;
+      --border: #2a2a2a;
+      --text: #f0ece4;
+      --muted: #888;
+      --amber: #F5A623;
+      --red: #ff4444;
+      --green: #44cc66;
+    }
+    body { background: var(--bg); color: var(--text); font-family: 'Inter', sans-serif; min-height: 100vh; }
+
+    /* ── LOGIN ── */
+    #login-screen {
+      display: flex; align-items: center; justify-content: center;
+      min-height: 100vh; flex-direction: column; gap: 1.5rem;
+    }
+    #login-screen h1 { font-family: 'Barlow Condensed', sans-serif; font-size: 2.5rem; color: var(--accent); letter-spacing: 0.05em; }
+    #login-screen input {
+      padding: 0.75rem 1.25rem; border: 2px solid var(--border); border-radius: 8px;
+      background: var(--surface); color: var(--text); font-size: 1rem; width: 280px;
+    }
+    #login-screen button {
+      padding: 0.75rem 2rem; background: var(--accent); color: #000;
+      border: none; border-radius: 8px; font-weight: 700; font-size: 1rem; cursor: pointer;
+    }
+    #login-error { color: var(--red); font-size: 0.9rem; }
+
+    /* ── MAIN ── */
+    #app { display: none; }
+    header {
+      background: var(--surface); border-bottom: 1px solid var(--border);
+      padding: 1rem 2rem; display: flex; align-items: center; gap: 1.5rem;
+    }
+    header h1 { font-family: 'Barlow Condensed', sans-serif; font-size: 1.8rem; color: var(--accent); }
+    header span { color: var(--muted); font-size: 0.85rem; }
+
+    main { max-width: 1100px; margin: 0 auto; padding: 2rem; }
+
+    /* ── TABS ── */
+    .tabs { display: flex; gap: 0.5rem; margin-bottom: 2rem; }
+    .tab-btn {
+      padding: 0.6rem 1.5rem; border-radius: 6px; border: 1px solid var(--border);
+      background: var(--surface); color: var(--text); cursor: pointer; font-size: 0.95rem;
+      transition: all 0.15s;
+    }
+    .tab-btn.active { background: var(--accent); color: #000; border-color: var(--accent); font-weight: 700; }
+    .tab-btn:hover:not(.active) { border-color: var(--accent); color: var(--accent); }
+
+    /* ── CARDS ── */
+    .card-grid { display: grid; gap: 1rem; }
+    .card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 12px; padding: 1.25rem 1.5rem;
+    }
+    .card.pending { border-left: 3px solid var(--amber); }
+    .card.approved { border-left: 3px solid var(--green); }
+    .card.denied { border-left: 3px solid var(--red); opacity: 0.6; }
+
+    .card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; margin-bottom: 0.75rem; flex-wrap: wrap; }
+    .card-name { font-family: 'Barlow Condensed', sans-serif; font-size: 1.4rem; font-weight: 700; }
+    .card-phone { color: var(--accent); font-size: 0.9rem; font-weight: 600; }
+    .card-meta { display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; font-size: 0.875rem; color: var(--muted); margin-bottom: 0.75rem; }
+    .card-meta strong { color: var(--text); }
+    .card-notes { font-size: 0.85rem; color: var(--muted); font-style: italic; margin-bottom: 0.75rem; }
+    .card-submitted { font-size: 0.75rem; color: #555; margin-bottom: 0.75rem; }
+    .card-actions { display: flex; gap: 0.75rem; }
+    .btn { padding: 0.5rem 1.25rem; border-radius: 6px; border: none; cursor: pointer; font-weight: 600; font-size: 0.875rem; transition: opacity 0.15s; }
+    .btn:hover { opacity: 0.85; }
+    .btn-approve { background: var(--green); color: #000; }
+    .btn-deny { background: var(--red); color: #fff; }
+    .badge {
+      padding: 0.25rem 0.75rem; border-radius: 999px; font-size: 0.75rem; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.05em;
+    }
+    .badge-pending { background: rgba(245,166,35,0.15); color: var(--amber); }
+    .badge-approved { background: rgba(68,204,102,0.15); color: var(--green); }
+    .badge-denied { background: rgba(255,68,68,0.15); color: var(--red); }
+
+    .empty-state { text-align: center; padding: 3rem; color: var(--muted); }
+
+    /* ── SECTION DIVIDER ── */
+    .section-title {
+      font-family: 'Barlow Condensed', sans-serif; font-size: 1.5rem; font-weight: 700;
+      color: var(--accent); letter-spacing: 0.05em; margin-bottom: 1rem;
+      border-bottom: 1px solid var(--border); padding-bottom: 0.5rem;
+    }
+
+    /* ── BLOCK SLOT FORM ── */
+    .block-section { margin-top: 3rem; }
+    .form-row { display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 1rem; }
+    .form-group { display: flex; flex-direction: column; gap: 0.4rem; flex: 1; min-width: 140px; }
+    .form-group label { font-size: 0.8rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+    .form-group input, .form-group textarea, .form-group select {
+      padding: 0.6rem 0.9rem; border: 1px solid var(--border); border-radius: 6px;
+      background: var(--surface); color: var(--text); font-size: 0.9rem; font-family: inherit;
+    }
+    .form-group input:focus, .form-group textarea:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+    .btn-block { padding: 0.65rem 1.5rem; background: var(--accent); color: #000; border: none; border-radius: 6px; font-weight: 700; cursor: pointer; }
+
+    /* ── BLOCKED LIST ── */
+    .block-list { display: grid; gap: 0.75rem; margin-top: 1.5rem; }
+    .block-item {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+      padding: 0.75rem 1rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+    }
+    .block-item-info { font-size: 0.875rem; }
+    .block-item-info strong { color: var(--text); }
+    .block-item-info span { color: var(--muted); }
+    .btn-delete { padding: 0.4rem 0.9rem; background: var(--red); color: #fff; border: none; border-radius: 5px; cursor: pointer; font-size: 0.8rem; font-weight: 600; }
+
+    .loading { text-align: center; padding: 2rem; color: var(--muted); }
+    .refresh-btn {
+      padding: 0.4rem 1rem; background: transparent; border: 1px solid var(--border);
+      color: var(--muted); border-radius: 6px; cursor: pointer; font-size: 0.8rem;
+    }
+    .refresh-btn:hover { border-color: var(--accent); color: var(--accent); }
+  </style>
+</head>
+<body>
+
+<!-- LOGIN -->
+<div id="login-screen">
+  <h1>🏗 PRAIRIE PUMPING ADMIN</h1>
+  <input type="password" id="pw-input" placeholder="Admin password" onkeydown="if(event.key==='Enter')doLogin()" />
+  <button onclick="doLogin()">Unlock Admin</button>
+  <span id="login-error"></span>
+</div>
+
+<!-- MAIN APP -->
+<div id="app">
+  <header>
+    <h1>🏗 PRAIRIE PUMPING ADMIN</h1>
+    <span id="last-refresh"></span>
+    <button class="refresh-btn" onclick="refreshAll()">↻ Refresh</button>
+  </header>
+  <main>
+    <!-- Tabs -->
+    <div class="tabs">
+      <button class="tab-btn active" onclick="switchTab('pending')">⏳ Pending <span id="count-pending"></span></button>
+      <button class="tab-btn" onclick="switchTab('approved')">✅ Approved <span id="count-approved"></span></button>
+      <button class="tab-btn" onclick="switchTab('denied')">❌ Denied <span id="count-denied"></span></button>
+    </div>
+
+    <div id="requests-container" class="card-grid"></div>
+
+    <!-- Block a slot -->
+    <div class="block-section">
+      <div class="section-title">🚫 Block a Time Slot</div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Date</label>
+          <input type="date" id="block-date" />
+        </div>
+        <div class="form-group">
+          <label>Start Time</label>
+          <input type="time" id="block-start" min="06:00" max="17:00" value="06:00" />
+        </div>
+        <div class="form-group">
+          <label>End Time</label>
+          <input type="time" id="block-end" min="06:00" max="17:00" value="08:00" />
+        </div>
+        <div class="form-group" style="flex:2">
+          <label>Reason (optional)</label>
+          <input type="text" id="block-reason" placeholder="e.g., Equipment maintenance, personal day" />
+        </div>
+      </div>
+      <button class="btn-block" onclick="addBlock()">Add Block</button>
+
+      <div id="block-list" class="block-list" style="margin-top:1.5rem"></div>
+    </div>
+  </main>
+</div>
+
+<script>
+  const API_BASE = window.location.origin;
+  let adminPassword = '';
+  let currentTab = 'pending';
+  let allBookings = {};
+
+  function doLogin() {
+    const pw = document.getElementById('pw-input').value;
+    if (pw === 'BoredRoom2025!') {
+      adminPassword = pw;
+      document.getElementById('login-screen').style.display = 'none';
+      document.getElementById('app').style.display = 'block';
+      refreshAll();
+    } else {
+      document.getElementById('login-error').textContent = 'Wrong password. Try again.';
+    }
+  }
+
+  function headers() {
+    return { 'Content-Type': 'application/json', 'X-Admin-Password': adminPassword };
+  }
+
+  async function fetchRequests(status) {
+    const url = status
+      ? `${API_BASE}/api/admin/requests?status=${status}`
+      : `${API_BASE}/api/admin/requests`;
+    const res = await fetch(url, { headers: headers() });
+    return res.json();
+  }
+
+  async function refreshAll() {
+    document.getElementById('last-refresh').textContent = 'Loading…';
+    try {
+      // Fetch all statuses at once
+      const [pending, approved, denied] = await Promise.all([
+        fetchRequests('pending'),
+        fetchRequests('approved'),
+        fetchRequests('denied')
+      ]);
+      allBookings = { pending, approved, denied };
+      document.getElementById('count-pending').textContent = pending.length ? `(${pending.length})` : '';
+      document.getElementById('count-approved').textContent = approved.length ? `(${approved.length})` : '';
+      document.getElementById('count-denied').textContent = denied.length ? `(${denied.length})` : '';
+      renderTab(currentTab);
+      loadBlocks();
+      document.getElementById('last-refresh').textContent = `Last refresh: ${new Date().toLocaleTimeString()}`;
+    } catch (e) {
+      document.getElementById('last-refresh').textContent = 'Error loading data';
+    }
+  }
+
+  function switchTab(tab) {
+    currentTab = tab;
+    document.querySelectorAll('.tab-btn').forEach((b, i) => {
+      b.classList.toggle('active', ['pending','approved','denied'][i] === tab);
+    });
+    renderTab(tab);
+  }
+
+  function renderTab(tab) {
+    const container = document.getElementById('requests-container');
+    const bookings = allBookings[tab] || [];
+    if (!bookings.length) {
+      container.innerHTML = `<div class="empty-state">No ${tab} requests.</div>`;
+      return;
+    }
+    container.innerHTML = bookings.map(b => renderCard(b)).join('');
+  }
+
+  function renderCard(b) {
+    const dateStr = formatDate(b.requested_date);
+    const timeBlock = `${fmt12(b.requested_start)} – ${fmt12(b.requested_end)}`;
+    const notes = b.notes ? `<div class="card-notes">"${escHtml(b.notes)}"</div>` : '';
+    const actions = b.status === 'pending' ? `
+      <div class="card-actions">
+        <button class="btn btn-approve" onclick="approveBooking(${b.id})">✅ Approve</button>
+        <button class="btn btn-deny" onclick="denyBooking(${b.id})">❌ Deny</button>
+      </div>` : '';
+
+    return `
+    <div class="card ${b.status}" id="card-${b.id}">
+      <div class="card-header">
+        <div>
+          <div class="card-name">${escHtml(b.name)}</div>
+          <div class="card-phone">${escHtml(b.phone)}</div>
+        </div>
+        <span class="badge badge-${b.status}">${b.status}</span>
+      </div>
+      <div class="card-meta">
+        <span>📅 <strong>${dateStr}</strong></span>
+        <span>⏰ <strong>${timeBlock}</strong></span>
+        <span>🏗 <strong>${b.yards} yards</strong></span>
+        <span>⏱ <strong>${b.estimated_hours}h estimated</strong></span>
+      </div>
+      ${notes}
+      <div class="card-submitted">Submitted: ${b.created_at}</div>
+      ${actions}
+    </div>`;
+  }
+
+  async function approveBooking(id) {
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/requests/${id}/approve`, {
+        method: 'PUT', headers: headers()
+      });
+      if (res.ok) refreshAll();
+      else alert('Error approving booking');
+    } catch(e) { alert('Network error'); }
+  }
+
+  async function denyBooking(id) {
+    if (!confirm('Deny this booking request?')) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/requests/${id}/deny`, {
+        method: 'PUT', headers: headers()
+      });
+      if (res.ok) refreshAll();
+      else alert('Error denying booking');
+    } catch(e) { alert('Network error'); }
+  }
+
+  async function addBlock() {
+    const date = document.getElementById('block-date').value;
+    const startTime = document.getElementById('block-start').value;
+    const endTime = document.getElementById('block-end').value;
+    const reason = document.getElementById('block-reason').value;
+
+    if (!date || !startTime || !endTime) {
+      alert('Please fill in date, start time, and end time.');
+      return;
+    }
+
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/block`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify({ date, startTime, endTime, reason })
+      });
+      if (res.ok) {
+        document.getElementById('block-date').value = '';
+        document.getElementById('block-reason').value = '';
+        loadBlocks();
+      } else {
+        const err = await res.json();
+        alert(err.error || 'Error adding block');
+      }
+    } catch(e) { alert('Network error'); }
+  }
+
+  async function loadBlocks() {
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/blocks`, { headers: headers() });
+      const blocks = await res.json();
+      const container = document.getElementById('block-list');
+      if (!blocks.length) {
+        container.innerHTML = '<div style="color:#555;font-size:0.85rem">No blocked slots.</div>';
+        return;
+      }
+      container.innerHTML = blocks.map(b => `
+        <div class="block-item">
+          <div class="block-item-info">
+            <strong>${formatDate(b.block_date)}</strong> &nbsp;
+            <span>${fmt12(b.start_time)} – ${fmt12(b.end_time)}</span>
+            ${b.reason ? `<span style="margin-left:1rem;color:#666">— ${escHtml(b.reason)}</span>` : ''}
+          </div>
+          <button class="btn-delete" onclick="deleteBlock(${b.id})">Remove</button>
+        </div>
+      `).join('');
+    } catch(e) {}
+  }
+
+  async function deleteBlock(id) {
+    if (!confirm('Remove this blocked slot?')) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/block/${id}`, {
+        method: 'DELETE', headers: headers()
+      });
+      if (res.ok) loadBlocks();
+    } catch(e) { alert('Network error'); }
+  }
+
+  // ── UTILS ──
+  function fmt12(timeStr) {
+    if (!timeStr) return '';
+    const [h, m] = timeStr.split(':').map(Number);
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    const h12 = h % 12 || 12;
+    return `${h12}:${String(m).padStart(2,'0')} ${ampm}`;
+  }
+
+  function formatDate(dateStr) {
+    if (!dateStr) return '';
+    const [y, m, d] = dateStr.split('-').map(Number);
+    const date = new Date(y, m - 1, d);
+    return date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+  }
+
+  function escHtml(str) {
+    if (!str) return '';
+    return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  // Auto-refresh every 2 minutes
+  setInterval(refreshAll, 120000);
+</script>
+</body>
+</html>
