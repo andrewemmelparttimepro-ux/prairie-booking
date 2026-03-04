@@ -1,64 +1,62 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
-const sqlite3 = require('sqlite3').verbose();
+const { Pool } = require('pg');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
 // ─── DATABASE ────────────────────────────────────────────────────────────────
-const db = new sqlite3.Database(path.join(__dirname, 'bookings.db'), (err) => {
-  if (err) { console.error('DB open error:', err); process.exit(1); }
-  console.log('📦 Database opened');
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
 });
 
-// Promisify helpers
-const dbRun = (sql, params = []) => new Promise((res, rej) =>
-  db.run(sql, params, function(err) { err ? rej(err) : res(this); })
-);
-const dbGet = (sql, params = []) => new Promise((res, rej) =>
-  db.get(sql, params, (err, row) => err ? rej(err) : res(row))
-);
-const dbAll = (sql, params = []) => new Promise((res, rej) =>
-  db.all(sql, params, (err, rows) => err ? rej(err) : res(rows))
-);
-
-// Serialize init to ensure WAL + schema before serving requests
-db.serialize(() => {
-  db.run('PRAGMA journal_mode = WAL');
-  db.run(`CREATE TABLE IF NOT EXISTS bookings (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    phone TEXT NOT NULL,
-    requested_date TEXT NOT NULL,
-    requested_start TEXT NOT NULL,
-    requested_end TEXT NOT NULL,
-    yards INTEGER NOT NULL,
-    estimated_hours REAL NOT NULL,
-    notes TEXT,
-    status TEXT DEFAULT 'pending',
-    created_at TEXT DEFAULT (datetime('now'))
-  )`);
-  db.run(`CREATE TABLE IF NOT EXISTS blocked_slots (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    block_date TEXT NOT NULL,
-    start_time TEXT NOT NULL,
-    end_time TEXT NOT NULL,
-    reason TEXT,
-    created_at TEXT DEFAULT (datetime('now'))
-  )`);
-});
+async function initDB() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS prairie_bookings (
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        phone TEXT NOT NULL,
+        requested_date TEXT NOT NULL,
+        requested_start TEXT NOT NULL,
+        requested_end TEXT NOT NULL,
+        yards INTEGER NOT NULL,
+        estimated_hours REAL NOT NULL,
+        notes TEXT,
+        status TEXT DEFAULT 'pending',
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS prairie_blocked_slots (
+        id SERIAL PRIMARY KEY,
+        block_date TEXT NOT NULL,
+        start_time TEXT NOT NULL,
+        end_time TEXT NOT NULL,
+        reason TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    console.log('📦 PostgreSQL tables initialized');
+  } catch (err) {
+    console.error('DB init error:', err);
+    process.exit(1);
+  }
+}
 
 // ─── MIDDLEWARE ───────────────────────────────────────────────────────────────
 app.use(cors({
-  origin: (origin, cb) => cb(null, true), // allow all origins
+  origin: (origin, cb) => cb(null, true),
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'X-Admin-Password']
 }));
 app.use(express.json());
 
-// Serve admin.html
+// Serve static pages
 app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'admin.html')));
+app.get('/book', (req, res) => res.sendFile(path.join(__dirname, 'book.html')));
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 const ADMIN_PASSWORD = 'BoredRoom2025!';
@@ -122,15 +120,19 @@ app.get('/api/availability', async (req, res) => {
       return res.json({ date, slots: TIMES.map(t => ({ time: t, status: 'unavailable', reason: 'Closed Sundays' })) });
     }
 
-    const approved = await dbAll(
-      `SELECT requested_start, requested_end FROM bookings WHERE requested_date = ? AND status = 'approved'`, [date]
+    const approvedResult = await pool.query(
+      `SELECT requested_start, requested_end FROM prairie_bookings WHERE requested_date = $1 AND status = 'approved'`, [date]
     );
-    const pending = await dbAll(
-      `SELECT requested_start, requested_end FROM bookings WHERE requested_date = ? AND status = 'pending'`, [date]
+    const pendingResult = await pool.query(
+      `SELECT requested_start, requested_end FROM prairie_bookings WHERE requested_date = $1 AND status = 'pending'`, [date]
     );
-    const blocked = await dbAll(
-      `SELECT start_time, end_time FROM blocked_slots WHERE block_date = ?`, [date]
+    const blockedResult = await pool.query(
+      `SELECT start_time, end_time FROM prairie_blocked_slots WHERE block_date = $1`, [date]
     );
+
+    const approved = approvedResult.rows;
+    const pending = pendingResult.rows;
+    const blocked = blockedResult.rows;
 
     const slots = TIMES.map(time => {
       const slotEnd = `${String(parseInt(time) + 1).padStart(2, '0')}:00`;
@@ -189,26 +191,26 @@ app.post('/api/request', async (req, res) => {
     const endTime = addHours(startTime, estimatedHours);
 
     // Check for conflicts
-    const approved = await dbAll(
-      `SELECT requested_start, requested_end FROM bookings WHERE requested_date = ? AND status = 'approved'`, [date]
+    const approvedResult = await pool.query(
+      `SELECT requested_start, requested_end FROM prairie_bookings WHERE requested_date = $1 AND status = 'approved'`, [date]
     );
-    const blocked = await dbAll(
-      `SELECT start_time as requested_start, end_time as requested_end FROM blocked_slots WHERE block_date = ?`, [date]
+    const blockedResult = await pool.query(
+      `SELECT start_time as requested_start, end_time as requested_end FROM prairie_blocked_slots WHERE block_date = $1`, [date]
     );
 
-    for (const b of [...approved, ...blocked]) {
+    for (const b of [...approvedResult.rows, ...blockedResult.rows]) {
       if (overlaps(startTime, endTime, b.requested_start, b.requested_end)) {
         return res.status(409).json({ error: 'Time slot conflicts with existing booking. Please choose another time.' });
       }
     }
 
-    const result = await dbRun(
-      `INSERT INTO bookings (name, phone, requested_date, requested_start, requested_end, yards, estimated_hours, notes, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+    const insertResult = await pool.query(
+      `INSERT INTO prairie_bookings (name, phone, requested_date, requested_start, requested_end, yards, estimated_hours, notes, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending') RETURNING *`,
       [name, phone, date, startTime, endTime, yardsNum, estimatedHours, notes || null]
     );
 
-    const booking = await dbGet('SELECT * FROM bookings WHERE id = ?', [result.lastID]);
+    const booking = insertResult.rows[0];
     console.log('📋 NEW BOOKING:', JSON.stringify(booking));
 
     res.json({ success: true, booking });
@@ -223,17 +225,21 @@ app.post('/api/request', async (req, res) => {
 app.get('/api/admin/requests', requireAdmin, async (req, res) => {
   try {
     const { status } = req.query;
-    const rows = status
-      ? await dbAll('SELECT * FROM bookings WHERE status = ? ORDER BY requested_date, requested_start', [status])
-      : await dbAll('SELECT * FROM bookings ORDER BY requested_date, requested_start');
-    res.json(rows);
+    let result;
+    if (status) {
+      result = await pool.query('SELECT * FROM prairie_bookings WHERE status = $1 ORDER BY requested_date, requested_start', [status]);
+    } else {
+      result = await pool.query('SELECT * FROM prairie_bookings ORDER BY requested_date, requested_start');
+    }
+    res.json(result.rows);
   } catch (err) { res.status(500).json({ error: 'Server error' }); }
 });
 
 app.put('/api/admin/requests/:id/approve', requireAdmin, async (req, res) => {
   try {
-    await dbRun("UPDATE bookings SET status = 'approved' WHERE id = ?", [req.params.id]);
-    const b = await dbGet('SELECT * FROM bookings WHERE id = ?', [req.params.id]);
+    await pool.query("UPDATE prairie_bookings SET status = 'approved' WHERE id = $1", [req.params.id]);
+    const result = await pool.query('SELECT * FROM prairie_bookings WHERE id = $1', [req.params.id]);
+    const b = result.rows[0];
     if (!b) return res.status(404).json({ error: 'Not found' });
     console.log('✅ APPROVED:', b.id, b.name, b.requested_date);
     res.json(b);
@@ -242,8 +248,9 @@ app.put('/api/admin/requests/:id/approve', requireAdmin, async (req, res) => {
 
 app.put('/api/admin/requests/:id/deny', requireAdmin, async (req, res) => {
   try {
-    await dbRun("UPDATE bookings SET status = 'denied' WHERE id = ?", [req.params.id]);
-    const b = await dbGet('SELECT * FROM bookings WHERE id = ?', [req.params.id]);
+    await pool.query("UPDATE prairie_bookings SET status = 'denied' WHERE id = $1", [req.params.id]);
+    const result = await pool.query('SELECT * FROM prairie_bookings WHERE id = $1', [req.params.id]);
+    const b = result.rows[0];
     if (!b) return res.status(404).json({ error: 'Not found' });
     console.log('❌ DENIED:', b.id, b.name);
     res.json(b);
@@ -256,31 +263,32 @@ app.post('/api/admin/block', requireAdmin, async (req, res) => {
     if (!date || !startTime || !endTime) {
       return res.status(400).json({ error: 'date, startTime, endTime required' });
     }
-    const result = await dbRun(
-      'INSERT INTO blocked_slots (block_date, start_time, end_time, reason) VALUES (?, ?, ?, ?)',
+    const result = await pool.query(
+      'INSERT INTO prairie_blocked_slots (block_date, start_time, end_time, reason) VALUES ($1, $2, $3, $4) RETURNING *',
       [date, startTime, endTime, reason || null]
     );
-    const slot = await dbGet('SELECT * FROM blocked_slots WHERE id = ?', [result.lastID]);
-    res.json(slot);
+    res.json(result.rows[0]);
   } catch (err) { res.status(500).json({ error: 'Server error' }); }
 });
 
 app.delete('/api/admin/block/:id', requireAdmin, async (req, res) => {
   try {
-    await dbRun('DELETE FROM blocked_slots WHERE id = ?', [req.params.id]);
+    await pool.query('DELETE FROM prairie_blocked_slots WHERE id = $1', [req.params.id]);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: 'Server error' }); }
 });
 
 app.get('/api/admin/blocks', requireAdmin, async (req, res) => {
   try {
-    const slots = await dbAll('SELECT * FROM blocked_slots ORDER BY block_date, start_time');
-    res.json(slots);
+    const result = await pool.query('SELECT * FROM prairie_blocked_slots ORDER BY block_date, start_time');
+    res.json(result.rows);
   } catch (err) { res.status(500).json({ error: 'Server error' }); }
 });
 
 // ─── START ────────────────────────────────────────────────────────────────────
-app.listen(PORT, () => {
-  console.log(`🚀 Prairie Booking API on port ${PORT}`);
-  console.log(`   Admin: /admin | Health: /health`);
+initDB().then(() => {
+  app.listen(PORT, () => {
+    console.log(`🚀 Prairie Booking API on port ${PORT}`);
+    console.log(`   Admin: /admin | Book: /book | Health: /health`);
+  });
 });

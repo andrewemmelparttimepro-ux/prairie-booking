@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Schedule a Pump — Prairie Pumping</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700;800&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --accent: #CCFF00;
+      --bg: #0A0A0A;
+      --surface: #141414;
+      --border: #2a2a2a;
+      --text: #f0ece4;
+      --muted: #888;
+      --green: #44cc66;
+      --amber: #F5A623;
+      --red: #ff4444;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', sans-serif;
+      min-height: 100vh;
+      line-height: 1.6;
+    }
+
+    /* ── HEADER ── */
+    .site-header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 1rem 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .site-header .logo {
+      font-family: 'Barlow Condensed', sans-serif;
+      font-weight: 800;
+      font-size: 1.6rem;
+      color: var(--accent);
+      letter-spacing: 0.08em;
+      text-decoration: none;
+    }
+    .site-header .back-link {
+      color: var(--muted);
+      font-size: 0.85rem;
+      text-decoration: none;
+      transition: color 0.2s;
+    }
+    .site-header .back-link:hover { color: var(--accent); }
+
+    /* ── MAIN ── */
+    .page-wrap {
+      max-width: 680px;
+      margin: 0 auto;
+      padding: 3rem 1.5rem 4rem;
+    }
+
+    h1 {
+      font-family: 'Barlow Condensed', sans-serif;
+      font-weight: 800;
+      font-size: 2.8rem;
+      color: var(--accent);
+      letter-spacing: 0.06em;
+      line-height: 1.1;
+      margin-bottom: 0.5rem;
+    }
+    .subtitle {
+      color: var(--muted);
+      font-size: 1rem;
+      margin-bottom: 2.5rem;
+    }
+
+    /* ── STEP LABELS ── */
+    .step-label {
+      font-family: 'Barlow Condensed', sans-serif;
+      font-weight: 700;
+      font-size: 1.2rem;
+      color: var(--accent);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      margin-bottom: 0.75rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .step-label .num {
+      background: var(--accent);
+      color: #000;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.85rem;
+      font-weight: 800;
+    }
+
+    /* ── DATE PICKER ── */
+    .date-section {
+      margin-bottom: 2rem;
+    }
+    .date-input {
+      width: 100%;
+      padding: 0.85rem 1rem;
+      border: 2px solid var(--border);
+      border-radius: 10px;
+      background: var(--surface);
+      color: var(--text);
+      font-size: 1rem;
+      font-family: inherit;
+      cursor: pointer;
+      transition: border-color 0.2s;
+    }
+    .date-input:focus { outline: none; border-color: var(--accent); }
+
+    /* ── SLOT GRID ── */
+    .slots-section {
+      margin-bottom: 2rem;
+      display: none;
+    }
+    .slots-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+      gap: 0.5rem;
+      margin-top: 0.5rem;
+    }
+    .slot {
+      padding: 0.6rem 0.5rem;
+      border-radius: 8px;
+      text-align: center;
+      font-size: 0.85rem;
+      font-weight: 600;
+      border: 2px solid transparent;
+      cursor: default;
+      transition: all 0.15s;
+    }
+    .slot.available {
+      background: rgba(68,204,102,0.12);
+      color: var(--green);
+      border-color: rgba(68,204,102,0.3);
+      cursor: pointer;
+    }
+    .slot.available:hover {
+      border-color: var(--green);
+      background: rgba(68,204,102,0.2);
+    }
+    .slot.available.selected {
+      border-color: var(--accent);
+      background: rgba(204,255,0,0.15);
+      color: var(--accent);
+    }
+    .slot.pending {
+      background: rgba(245,166,35,0.12);
+      color: var(--amber);
+      border-color: rgba(245,166,35,0.2);
+    }
+    .slot.booked, .slot.unavailable {
+      background: rgba(255,68,68,0.08);
+      color: #664444;
+      border-color: rgba(255,68,68,0.1);
+    }
+    .slots-loading {
+      color: var(--muted);
+      font-size: 0.9rem;
+      padding: 1rem 0;
+    }
+
+    /* ── FORM ── */
+    .form-section {
+      display: none;
+    }
+    .form-group {
+      margin-bottom: 1.25rem;
+    }
+    .form-group label {
+      display: block;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      margin-bottom: 0.4rem;
+      font-weight: 600;
+    }
+    .form-group input,
+    .form-group select,
+    .form-group textarea {
+      width: 100%;
+      padding: 0.8rem 1rem;
+      border: 2px solid var(--border);
+      border-radius: 10px;
+      background: var(--surface);
+      color: var(--text);
+      font-size: 1rem;
+      font-family: inherit;
+      transition: border-color 0.2s;
+    }
+    .form-group input:focus,
+    .form-group select:focus,
+    .form-group textarea:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+    .form-group input::placeholder,
+    .form-group textarea::placeholder {
+      color: #555;
+    }
+    .form-group select option {
+      background: var(--surface);
+      color: var(--text);
+    }
+    .form-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+    @media (max-width: 500px) {
+      .form-row { grid-template-columns: 1fr; }
+    }
+
+    .estimate-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem 1.25rem;
+      margin-bottom: 1.5rem;
+      display: none;
+    }
+    .estimate-box .est-label {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      margin-bottom: 0.25rem;
+    }
+    .estimate-box .est-value {
+      font-family: 'Barlow Condensed', sans-serif;
+      font-size: 1.6rem;
+      font-weight: 700;
+      color: var(--accent);
+    }
+
+    .submit-btn {
+      width: 100%;
+      padding: 1rem;
+      background: var(--accent);
+      color: #000;
+      border: none;
+      border-radius: 10px;
+      font-family: 'Barlow Condensed', sans-serif;
+      font-size: 1.3rem;
+      font-weight: 800;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: background 0.2s, transform 0.15s;
+    }
+    .submit-btn:hover { background: #d6ff1a; transform: translateY(-1px); }
+    .submit-btn:active { transform: scale(0.98); }
+    .submit-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    /* ── STATES ── */
+    .success-state, .error-state {
+      display: none;
+      text-align: center;
+      padding: 3rem 1rem;
+    }
+    .success-state .icon { font-size: 4rem; margin-bottom: 1rem; }
+    .success-state h2 {
+      font-family: 'Barlow Condensed', sans-serif;
+      font-size: 2rem;
+      color: var(--accent);
+      margin-bottom: 0.75rem;
+    }
+    .success-state p { color: var(--muted); font-size: 1.05rem; max-width: 400px; margin: 0 auto; }
+    .success-state .phone-link {
+      display: inline-block;
+      margin-top: 1.5rem;
+      color: var(--accent);
+      font-weight: 600;
+      font-size: 1.1rem;
+      text-decoration: none;
+    }
+
+    .error-state {
+      background: rgba(255,68,68,0.08);
+      border: 1px solid rgba(255,68,68,0.2);
+      border-radius: 12px;
+      margin-bottom: 1.5rem;
+      padding: 1rem 1.25rem;
+      text-align: left;
+    }
+    .error-state p { color: var(--red); font-weight: 500; }
+    .error-state .dismiss {
+      background: none;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 0.8rem;
+      margin-top: 0.5rem;
+      text-decoration: underline;
+    }
+
+    /* ── FOOTER ── */
+    .page-footer {
+      text-align: center;
+      padding: 2rem;
+      color: #333;
+      font-size: 0.8rem;
+    }
+    .page-footer a { color: var(--accent); text-decoration: none; }
+  </style>
+</head>
+<body>
+
+  <header class="site-header">
+    <a href="https://prairiepumping.com" class="logo">PRAIRIE PUMPING</a>
+    <a href="https://prairiepumping.com" class="back-link">← Back to Site</a>
+  </header>
+
+  <div class="page-wrap">
+    <h1>SCHEDULE A PUMP</h1>
+    <p class="subtitle">Pick a date, choose your slot, and we'll call to confirm.</p>
+
+    <!-- ERROR STATE -->
+    <div class="error-state" id="errorState">
+      <p id="errorMsg"></p>
+      <button class="dismiss" onclick="dismissError()">Dismiss</button>
+    </div>
+
+    <!-- SUCCESS STATE -->
+    <div class="success-state" id="successState">
+      <div class="icon">✅</div>
+      <h2>REQUEST SUBMITTED!</h2>
+      <p>We'll call to confirm your pump within 24 hours. If you need us sooner, give us a ring.</p>
+      <a href="tel:+17018334375" class="phone-link">📞 (701) 833-4375</a>
+    </div>
+
+    <!-- BOOKING FLOW -->
+    <div id="bookingFlow">
+      <!-- STEP 1: DATE -->
+      <div class="date-section">
+        <div class="step-label"><span class="num">1</span> Pick a Date</div>
+        <input type="date" class="date-input" id="dateInput" />
+      </div>
+
+      <!-- STEP 2: SLOTS -->
+      <div class="slots-section" id="slotsSection">
+        <div class="step-label"><span class="num">2</span> Choose a Start Time</div>
+        <div class="slots-loading" id="slotsLoading">Loading availability…</div>
+        <div class="slots-grid" id="slotsGrid"></div>
+      </div>
+
+      <!-- STEP 3: FORM -->
+      <div class="form-section" id="formSection">
+        <div class="step-label"><span class="num">3</span> Your Details</div>
+        <form id="bookingForm" onsubmit="return submitBooking(event)">
+          <input type="hidden" id="formDate" name="date" />
+          <input type="hidden" id="formStartTime" name="startTime" />
+
+          <div class="form-row">
+            <div class="form-group">
+              <label for="formName">Name</label>
+              <input type="text" id="formName" name="name" placeholder="Your name" required />
+            </div>
+            <div class="form-group">
+              <label for="formPhone">Phone</label>
+              <input type="tel" id="formPhone" name="phone" placeholder="(701) 000-0000" required />
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="formYards">Yards of Concrete</label>
+            <input type="number" id="formYards" name="yards" min="1" placeholder="e.g. 40" required />
+          </div>
+
+          <div class="estimate-box" id="estimateBox">
+            <div class="est-label">Estimated Pump Time</div>
+            <div class="est-value" id="estimateValue">—</div>
+          </div>
+
+          <div class="form-group">
+            <label for="formNotes">Notes / Job Details</label>
+            <textarea id="formNotes" name="notes" rows="3" placeholder="Location, access info, anything we should know..."></textarea>
+          </div>
+
+          <button type="submit" class="submit-btn" id="submitBtn">REQUEST THIS PUMP</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="page-footer">
+    <p>Prairie Pumping &middot; Minot, ND &middot; <a href="tel:+17018334375">(701) 833-4375</a></p>
+  </div>
+
+<script>
+  const API_BASE = window.location.origin;
+  let selectedDate = '';
+  let selectedTime = '';
+
+  // ── DATE PICKER ──
+  const dateInput = document.getElementById('dateInput');
+
+  // Set min to today
+  const today = new Date();
+  const yyyy = today.getFullYear();
+  const mm = String(today.getMonth() + 1).padStart(2, '0');
+  const dd = String(today.getDate()).padStart(2, '0');
+  dateInput.min = `${yyyy}-${mm}-${dd}`;
+
+  dateInput.addEventListener('change', async function() {
+    const val = this.value;
+    if (!val) return;
+
+    // Block Sundays
+    const [y, m, d] = val.split('-').map(Number);
+    const dayOfWeek = new Date(y, m - 1, d).getDay();
+    if (dayOfWeek === 0) {
+      alert('We're closed on Sundays. Please pick another day.');
+      this.value = '';
+      return;
+    }
+
+    selectedDate = val;
+    selectedTime = '';
+    document.getElementById('formDate').value = val;
+    document.getElementById('formStartTime').value = '';
+    document.getElementById('formSection').style.display = 'none';
+
+    const slotsSection = document.getElementById('slotsSection');
+    slotsSection.style.display = 'block';
+    document.getElementById('slotsLoading').style.display = 'block';
+    document.getElementById('slotsGrid').innerHTML = '';
+
+    try {
+      const res = await fetch(`${API_BASE}/api/availability?date=${val}`);
+      const data = await res.json();
+      renderSlots(data.slots);
+    } catch (e) {
+      document.getElementById('slotsLoading').textContent = 'Error loading availability. Please try again.';
+    }
+  });
+
+  function renderSlots(slots) {
+    document.getElementById('slotsLoading').style.display = 'none';
+    const grid = document.getElementById('slotsGrid');
+    grid.innerHTML = slots.map(s => {
+      const label = fmt12(s.time);
+      const cls = s.status;
+      const clickable = s.status === 'available' ? `onclick="selectSlot('${s.time}', this)"` : '';
+      return `<div class="slot ${cls}" ${clickable}>${label}</div>`;
+    }).join('');
+  }
+
+  function selectSlot(time, el) {
+    // Deselect previous
+    document.querySelectorAll('.slot.selected').forEach(s => s.classList.remove('selected'));
+    el.classList.add('selected');
+
+    selectedTime = time;
+    document.getElementById('formStartTime').value = time;
+    document.getElementById('formSection').style.display = 'block';
+
+    // Scroll to form
+    document.getElementById('formSection').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  // ── YARDS → HOURS ESTIMATE ──
+  const yardsInput = document.getElementById('formYards');
+  yardsInput.addEventListener('input', function() {
+    const val = parseInt(this.value);
+    const box = document.getElementById('estimateBox');
+    if (!val || val < 1) {
+      box.style.display = 'none';
+      return;
+    }
+    const hours = yardsToHours(val);
+    document.getElementById('estimateValue').textContent = `~${hours} hours`;
+    box.style.display = 'block';
+  });
+
+  function yardsToHours(yards) {
+    if (yards <= 30) return 2;
+    if (yards <= 60) return 3;
+    if (yards <= 100) return 4;
+    if (yards <= 150) return 5;
+    if (yards <= 200) return 6;
+    return 8;
+  }
+
+  // ── SUBMIT ──
+  async function submitBooking(e) {
+    e.preventDefault();
+    dismissError();
+
+    const btn = document.getElementById('submitBtn');
+    btn.disabled = true;
+    btn.textContent = 'SUBMITTING…';
+
+    const payload = {
+      name: document.getElementById('formName').value.trim(),
+      phone: document.getElementById('formPhone').value.trim(),
+      date: document.getElementById('formDate').value,
+      startTime: document.getElementById('formStartTime').value,
+      yards: parseInt(document.getElementById('formYards').value),
+      notes: document.getElementById('formNotes').value.trim() || null
+    };
+
+    try {
+      const res = await fetch(`${API_BASE}/api/request`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        showError(data.error || 'Something went wrong. Please try again.');
+        btn.disabled = false;
+        btn.textContent = 'REQUEST THIS PUMP';
+        return;
+      }
+
+      // Success!
+      document.getElementById('bookingFlow').style.display = 'none';
+      document.getElementById('successState').style.display = 'block';
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch (err) {
+      showError('Network error. Please check your connection and try again.');
+      btn.disabled = false;
+      btn.textContent = 'REQUEST THIS PUMP';
+    }
+  }
+
+  // ── ERROR/SUCCESS HELPERS ──
+  function showError(msg) {
+    const el = document.getElementById('errorState');
+    document.getElementById('errorMsg').textContent = msg;
+    el.style.display = 'block';
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  function dismissError() {
+    document.getElementById('errorState').style.display = 'none';
+  }
+
+  // ── UTILS ──
+  function fmt12(timeStr) {
+    const [h, m] = timeStr.split(':').map(Number);
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    const h12 = h % 12 || 12;
+    return `${h12}:${String(m).padStart(2, '0')} ${ampm}`;
+  }
+</script>
+</body>
+</html>
